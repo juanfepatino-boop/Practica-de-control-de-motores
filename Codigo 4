@@ -1,0 +1,100 @@
+#include <Arduino.h>
+
+// --- PARÁMETROS CONFIGURABLES DE LA PRÁCTICA ---
+const int pinSensorAnalogo = A0;    // Pin analógico conectado a la salida análoga del sensor
+const int pinENA = 9;               // Pin PWM del Arduino conectado a ENA del L298N (Control de velocidad)
+const int pinIN1 = 7;               // Pin de control IN1 del L298N
+const int pinIN2 = 8;               // Pin de control IN2 del L298N
+
+const float Tm = 1.0;               // Tiempo de muestreo en segundos
+const int N = 20;                   // Pulsos por vuelta del disco ranurado
+const float D_rueda = 2.5;          // Diámetro de la rueda en cm
+const unsigned long t_estab = 5000; // Tiempo de estabilización de 5 segundos por nivel
+
+// Variables para la detección del flanco analógico
+int umbral = 512;                   // Valor medio de voltaje (0-1023) para detectar el paso de la ranura
+bool estadoAnterior = false;
+
+void setup() {
+  // Inicializar comunicación serial a 115200 baudios
+  Serial.begin(115200); 
+  delay(1000);
+
+  // Configurar pines del Puente H como salidas
+  pinMode(pinENA, OUTPUT);
+  pinMode(pinIN1, OUTPUT);
+  pinMode(pinIN2, OUTPUT);
+
+  // Configurar el sentido de giro fijo (Sentido Horario o Antihorario según prefieras)
+  digitalWrite(pinIN1, HIGH);
+  digitalWrite(pinIN2, LOW);
+
+  Serial.println("=== INICIO DE BARRIDO PWM CON PUENTE H (L298N) ===");
+  
+  // Ejecutar el barrido automático una sola vez al iniciar
+  ejecutarBarridoPuenteH();
+  
+  Serial.println("=== BARRIDO FINALIZADO ===");
+}
+
+void loop() {
+  // Vacío, el barrido se ejecuta de forma secuencial en el setup
+}
+
+void ejecutarBarridoPuenteH() {
+  // Pasos de ciclo de trabajo indicados en la guía (10% al 100%)
+  int pasos[] = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
+  int numPasos = 10;
+
+  for (int i = 0; i < numPasos; i++) {
+    int D = pasos[i];
+
+    // Mapear el porcentaje de Duty (0-100) al valor digital de 8 bits del Arduino UNO (0 a 255)
+    int valorDigital = map(D, 0, 100, 0, 255);
+    
+    // Aplicar la velocidad mediante PWM al pin ENA del L298N
+    analogWrite(pinENA, valorDigital);
+
+    // 1. Esperar el tiempo de estabilización mecánica del motor (5 segundos)
+    delay(t_estab);
+
+    // 2. Ventana de muestreo de Tm segundos (1 segundo) midiendo por el pin analógico A0
+    unsigned long inicioMuestreo = millis();
+    unsigned int cont = 0;
+
+    while (millis() - inicioMuestreo < (Tm * 1000)) {
+      int valorAnalogo = analogRead(pinSensorAnalogo);
+      bool estadoActual = (valorAnalogo > umbral);
+      
+      if (estadoActual && !estadoAnterior) {
+        cont++; // Contar flanco de subida en la señal analógica
+      }
+      estadoAnterior = estadoActual;
+    }
+
+    // --- CÁLCULOS EXIGIDOS POR LA GUÍA ---
+    float f_sensor = (float)cont / Tm;                  // Frecuencia del sensor en Hz
+    float RPM = (f_sensor / (float)N) * 60.0;           // Velocidad en RPM
+    float omega = RPM * (2.0 * PI / 60.0);              // Velocidad angular en rad/s
+    float v = (PI * D_rueda * RPM) / 60.0;              // Velocidad lineal en cm/s
+
+    // Imprimir en el Monitor Serial con formato claro
+    Serial.print("D=");
+    Serial.print(D);
+    Serial.print("% | PWM ENA=");
+    Serial.print(valorDigital);
+    Serial.print(" | RPM=");
+    Serial.print(RPM, 2);
+    Serial.print(" | w=");
+    Serial.print(omega, 2);
+    Serial.print(" rad/s | v=");
+    Serial.print(v, 2);
+    Serial.println(" cm/s");
+  }
+
+  // --- APAGADO SEGURO DEL MOTOR ---
+  analogWrite(pinENA, 0);
+  digitalWrite(pinIN1, LOW);
+  digitalWrite(pinIN2, LOW);
+  Serial.println("Motor detenido de forma segura.");
+}
