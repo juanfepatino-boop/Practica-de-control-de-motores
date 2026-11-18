@@ -1,0 +1,154 @@
+#include <Arduino.h>
+
+// --- PARÁMETROS CONFIGURABLES ---
+const int pinSensorAnalogo = A0;
+const int pinENA = 9;
+const int pinIN1 = 7;
+const int pinIN2 = 8;
+
+const float Tm = 1.0;               // Tiempo de muestreo en segundos
+const int N = 20;                   // Pulsos por vuelta
+const float D_rueda = 2.5;          // Diámetro en cm
+const unsigned long t_estab = 5000; // Estabilización
+const int numMuestras = 5;          // Número de muestras para estadística
+
+int umbral = 512;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(pinENA, OUTPUT);
+  pinMode(pinIN1, OUTPUT);
+  pinMode(pinIN2, OUTPUT);
+
+  Serial.println("=== INICIO PRUEBA VELOCIDADES OBJETIVO (CUADRO 4) ===");
+  
+  // 1. Prueba Hacia Adelante (3.0 cm/s)
+  Serial.println("\n--- Caso: Adelante | V_obj: 3.0 cm/s ---");
+  ejecutarPruebaObjetivo(3.0, true);
+
+  // 2. Prueba Hacia Atrás (1.5 cm/s)
+  Serial.println("\n--- Caso: Atrás | V_obj: 1.5 cm/s ---");
+  ejecutarPruebaObjetivo(1.5, false);
+
+  Serial.println("\n=== PRUEBA FINALIZADA ===");
+}
+
+void loop() {
+}
+
+// Función principal de prueba y estadística
+void ejecutarPruebaObjetivo(float v_obj, bool adelante) {
+  // Configurar dirección
+  if (adelante) {
+    digitalWrite(pinIN1, HIGH);
+    digitalWrite(pinIN2, LOW);
+  } else {
+    digitalWrite(pinIN1, LOW);
+    digitalWrite(pinIN2, HIGH);
+  }
+
+  // Cálculos teóricos objetivo
+  float RPM_obj = (v_obj * 60.0) / (PI * D_rueda);
+  
+  // Arrays para guardar muestras
+  float muestras_RPM[numMuestras];
+  float muestras_v[numMuestras];
+  
+  // --- BUSQUEDA DEL DUTY CYCLE ADECUADO ---
+  // Hacemos un barrido rápido para encontrar el Duty que más se acerca a v_obj
+  int D_ideal = 10; 
+  float menorError = 999.0;
+
+  for (int D = 10; D <= 40; D += 2) {
+    int pwm = map(D, 0, 100, 0, 255);
+    analogWrite(pinENA, 255); delay(50); // Kickstart
+    analogWrite(pinENA, pwm);
+    delay(2000); // Estabilización corta para la búsqueda
+    
+    float v_actual = medirVelocidad();
+    float errorActual = abs(v_actual - v_obj);
+    
+    if (errorActual < menorError) {
+      menorError = errorActual;
+      D_ideal = D;
+    }
+    // Si nos pasamos mucho, cortamos la búsqueda para ahorrar tiempo
+    if(v_actual > v_obj + 2.0) break; 
+  }
+
+  // --- MEDICIÓN ESTADÍSTICA CON EL DUTY IDEAL ---
+  int pwm_final = map(D_ideal, 0, 100, 0, 255);
+  analogWrite(pinENA, 255); delay(50);
+  analogWrite(pinENA, pwm_final);
+  
+  Serial.print("D ideal encontrado: "); Serial.print(D_ideal); Serial.println("%");
+  Serial.println("Tomando muestras (5 segundos)...");
+  delay(t_estab);
+
+  float sumaRPM = 0;
+  float sumav = 0;
+
+  // Toma de N muestras
+  for (int i = 0; i < numMuestras; i++) {
+    float v_med = medirVelocidad();
+    float RPM_med = (v_med * 60.0) / (PI * D_rueda);
+    
+    muestras_RPM[i] = RPM_med;
+    muestras_v[i] = v_med;
+    
+    sumaRPM += RPM_med;
+    sumav += v_med;
+  }
+
+  // Cálculos de Media
+  float RPM_media = sumaRPM / numMuestras;
+  float v_media = sumav / numMuestras;
+
+  // Cálculo de Desviación Estándar (σ) de las RPM
+  float sumaDiferenciasCuadrado = 0;
+  for (int i = 0; i < numMuestras; i++) {
+    sumaDiferenciasCuadrado += pow(muestras_RPM[i] - RPM_media, 2);
+  }
+  float sigma_RPM = sqrt(sumaDiferenciasCuadrado / numMuestras);
+
+  // Cálculo del Error porcentual final respecto al objetivo
+  float error_porcentaje = 100.0 * abs(v_media - v_obj) / v_obj;
+
+  // Apagar motor tras la prueba
+  analogWrite(pinENA, 0);
+
+  // --- IMPRESIÓN PARA EL CUADRO 4 ---
+  Serial.println("-----------------------------------------------------------------------------------------");
+  Serial.println("v_obj(cm/s) | RPM_obj | D(%) | RPM_med | σ_RPM | v_med(cm/s) | Error(%)");
+  Serial.print(v_obj, 2); Serial.print("        | ");
+  Serial.print(RPM_obj, 2); Serial.print("   | ");
+  Serial.print(D_ideal); Serial.print("   | ");
+  Serial.print(RPM_media, 2); Serial.print("   | ");
+  Serial.print(sigma_RPM, 2); Serial.print("  | ");
+  Serial.print(v_media, 2); Serial.print("        | ");
+  Serial.println(error_porcentaje, 2);
+  Serial.println("-----------------------------------------------------------------------------------------");
+}
+
+// Función auxiliar para medir la velocidad lineal actual
+float medirVelocidad() {
+  unsigned long inicioMuestreo = millis();
+  unsigned int cont = 0;
+  bool estadoAnt = false;
+
+  while (millis() - inicioMuestreo < (unsigned long)(Tm * 1000)) {
+    int valorAnalogo = analogRead(pinSensorAnalogo);
+    bool estadoActual = (valorAnalogo > umbral);
+    
+    if (estadoActual && !estadoAnt) {
+      cont++;
+    }
+    estadoAnt = estadoActual;
+  }
+
+  float f_sensor = (float)cont / Tm;                  
+  float RPM = (f_sensor / (float)N) * 60.0;           
+  return (PI * D_rueda * RPM) / 60.0; // Retorna velocidad lineal v 
+}
