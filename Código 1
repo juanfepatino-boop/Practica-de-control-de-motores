@@ -1,0 +1,56 @@
+// Variables de configuración de la práctica
+const int pinSensor = 2;   // Pin de interrupción en Arduino UNO
+const float Tm = 1.0;      // Tiempo de muestreo en segundos[cite: 2]
+const int N = 20;          // Pulsos por vuelta del disco ranurado[cite: 2]
+
+volatile unsigned int cont = 0; 
+unsigned int pulsos = 0;
+float rpm_dig = 0.0;
+
+// Variables para el filtro anti-rebote (Debounce) por software
+volatile unsigned long ultimoTiempo = 0;
+const unsigned long tiempoRebote = 10; // Ignorar pulsos con menos de 10ms de diferencia
+
+// Rutina de interrupción modificada con doble validación
+void contarPulsos() {
+  unsigned long tiempoActual = millis();
+  
+  // 1. Filtro de tiempo: Han pasado más de 10ms
+  if (tiempoActual - ultimoTiempo > tiempoRebote) {
+    
+    // 2. Filtro de hardware: Confirmar que la señal es un ALTO real y estable
+    if (digitalRead(pinSensor) == HIGH) {
+      cont++;
+      ultimoTiempo = tiempoActual;
+    }
+  }
+}
+
+void setup() {
+  // Inicializar comunicación serial a 115200 baudios
+  Serial.begin(115200); 
+  
+  // Configuración del pin del sensor
+  pinMode(pinSensor, INPUT_PULLUP);
+  
+  // Interrupción en el flanco de subida (RISING) conectada al pin 2
+  attachInterrupt(digitalPinToInterrupt(pinSensor), contarPulsos, RISING);
+}
+
+void loop() {
+  // Bucle principal: Esperar Tm (1 segundo)[cite: 2]
+  delay(Tm * 1000); 
+
+  // Deshabilitar interrupciones temporalmente para asegurar una lectura correcta de la variable compartida
+  noInterrupts();
+  pulsos = cont;
+  cont = 0; // Reiniciar contador[cite: 2]
+  interrupts();
+
+  // Calcular las RPM con la fórmula de la guía[cite: 2]
+  rpm_dig = (pulsos / Tm) / N * 60.0;
+
+  // Enviar el dato por el puerto serial con el formato requerido[cite: 2]
+  Serial.print("RPM_dig=");
+  Serial.println(rpm_dig);
+}
