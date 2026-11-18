@@ -1,0 +1,96 @@
+#include <Arduino.h>
+
+// --- PARÁMETROS CONFIGURABLES DE LA PRÁCTICA ---
+const int pinSensorAnalogo = A0;    
+const int pinENA = 9;               
+const int pinIN1 = 7;               
+const int pinIN2 = 8;               
+
+const float Tm = 1.0;               
+const int N = 20;                   
+const float D_rueda = 2.5;          
+const unsigned long t_estab = 5000; 
+
+int umbral = 512;                   
+bool estadoAnterior = false;
+
+void setup() {
+  Serial.begin(115200); 
+  delay(1000);
+
+  pinMode(pinENA, OUTPUT);
+  pinMode(pinIN1, OUTPUT);
+  pinMode(pinIN2, OUTPUT);
+
+  digitalWrite(pinIN1, HIGH);
+  digitalWrite(pinIN2, LOW);
+
+  Serial.println("=== INICIO DE BARRIDO PWM (LECTURA ANÁLOGA EN A0) ===");
+  ejecutarBarridoPuenteH();
+  Serial.println("=== BARRIDO FINALIZADO ===");
+}
+
+void loop() {
+}
+
+void ejecutarBarridoPuenteH() {
+  // --- NUEVO BARRIDO PROGRESIVO ---
+  // Incrementos pequeños del 6% al 20% para capturar las velocidades de 1.5 y 3 cm/s, 
+  // luego saltos estándar hasta el 100%.
+  int pasos[] = {6, 8, 10, 12, 14, 16, 18, 20, 30, 40, 50, 60, 70, 80, 90, 100};
+  int numPasos = 16; 
+
+  for (int i = 0; i < numPasos; i++) {
+    int D = pasos[i];
+
+    // Mapeo tradicional de 0-100 a 0-255
+    int valorDigital = map(D, 0, 100, 0, 255); 
+    
+    // Empujón de arranque silencioso (50ms)
+    analogWrite(pinENA, 255);
+    delay(50); 
+    
+    // Aplicar PWM
+    analogWrite(pinENA, valorDigital);
+    delay(t_estab);
+
+    // Muestreo
+    unsigned long inicioMuestreo = millis();
+    unsigned int cont = 0;
+
+    while (millis() - inicioMuestreo < (unsigned long)(Tm * 1000)) {
+      int valorAnalogo = analogRead(pinSensorAnalogo);
+      bool estadoActual = (valorAnalogo > umbral);
+      
+      if (estadoActual && !estadoAnterior) {
+        cont++;
+      }
+      estadoAnterior = estadoActual;
+    }
+
+    // Cálculos
+    float f_sensor = (float)cont / Tm;                  
+    float RPM = (f_sensor / (float)N) * 60.0;           
+    float omega = RPM * (2.0 * PI / 60.0);              
+    float v = (PI * D_rueda * RPM) / 60.0;              
+
+    // Impresión con formato
+    Serial.print("D=");
+    Serial.print(D);
+    Serial.print("% | Valor Digital=");
+    Serial.print(valorDigital);
+    Serial.print(" | RPM=");
+    Serial.print(RPM, 2);
+    Serial.print(" | w=");
+    Serial.print(omega, 2);
+    Serial.print(" rad/s | v=");
+    Serial.print(v, 2);
+    Serial.println(" cm/s");
+  }
+
+  // Apagado
+  analogWrite(pinENA, 0);
+  digitalWrite(pinIN1, LOW);
+  digitalWrite(pinIN2, LOW);
+  Serial.println("Motor detenido de forma segura.");
+}
